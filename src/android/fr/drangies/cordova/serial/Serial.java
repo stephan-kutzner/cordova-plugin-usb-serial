@@ -1,8 +1,8 @@
 package fr.drangies.cordova.serial;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -30,6 +30,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
+//import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbManager;
 import android.util.Base64;
 import android.util.Log;
@@ -69,10 +70,10 @@ public class Serial extends CordovaPlugin {
 	private boolean setDTR;
 	private boolean setRTS;
 	private boolean sleepOnPause;
-	
+
 	// callback that will be used to send back data to the cordova app
 	private CallbackContext readCallback;
-	
+
 	// I/O manager to handle new incoming serial data
 	private final ExecutorService mExecutor = Executors.newSingleThreadExecutor();
 	private SerialInputOutputManager mSerialIoManager;
@@ -91,13 +92,13 @@ public class Serial extends CordovaPlugin {
 	/**
 	 * Overridden execute method
 	 * @param action the string representation of the action to execute
-	 * @param args
 	 * @param callbackContext the cordova {@link CallbackContext}
 	 * @return true if the action exists, false otherwise
 	 * @throws JSONException if the args parsing fails
 	 */
 	@Override
 	public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException {
+		Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
 		Log.d(TAG, "Action: " + action);
 		JSONObject arg_object = args.optJSONObject(0);
 		// request permission
@@ -116,22 +117,6 @@ public class Serial extends CordovaPlugin {
 		else if (ACTION_WRITE.equals(action)) {
 			String data = arg_object.getString("data");
 			writeSerial(data, callbackContext);
-			return true;
-		}
-		// write hex to the serial port
-		else if (ACTION_WRITE_HEX.equals(action)) {
-			String data = arg_object.getString("data");
-			writeSerialHex(data, callbackContext);
-			return true;
-		}
-		// read on the serial port
-		else if (ACTION_READ.equals(action)) {
-			readSerial(callbackContext);
-			return true;
-		}
-		// close the serial port
-		else if (ACTION_CLOSE.equals(action)) {
-			closeSerial(callbackContext);
 			return true;
 		}
 		// Register read callback
@@ -162,25 +147,28 @@ public class Serial extends CordovaPlugin {
 					int pid = o_pid instanceof Number ? ((Number) o_pid).intValue() : Integer.parseInt((String) o_pid,16);
 					String driver = opts.has("driver") ? (String) opts.opt("driver") : "CdcAcmSerialDriver";
 
-					if (driver.equals("FtdiSerialDriver")) {
-						customTable.addProduct(vid, pid, FtdiSerialDriver.class);
+					assert driver != null;
+					switch (driver) {
+						case "FtdiSerialDriver":
+							customTable.addProduct(vid, pid, FtdiSerialDriver.class);
+							break;
+						case "CdcAcmSerialDriver":
+							customTable.addProduct(vid, pid, CdcAcmSerialDriver.class);
+							break;
+						case "Cp21xxSerialDriver":
+							customTable.addProduct(vid, pid, Cp21xxSerialDriver.class);
+							break;
+						case "ProlificSerialDriver":
+							customTable.addProduct(vid, pid, ProlificSerialDriver.class);
+							break;
+						case "Ch34xSerialDriver":
+							customTable.addProduct(vid, pid, Ch34xSerialDriver.class);
+							break;
+						default:
+							Log.d(TAG, "Unknown driver!");
+							callbackContext.error("Unknown driver!");
+							break;
 					}
-					else if (driver.equals("CdcAcmSerialDriver")) {
-						customTable.addProduct(vid, pid, CdcAcmSerialDriver.class);
-					}
-					else if (driver.equals("Cp21xxSerialDriver")) {
-                    	customTable.addProduct(vid, pid, Cp21xxSerialDriver.class);
-					}
-					else if (driver.equals("ProlificSerialDriver")) {
-                    	customTable.addProduct(vid, pid, ProlificSerialDriver.class);
-					}
-					else if (driver.equals("Ch34xSerialDriver")) {
-						customTable.addProduct(vid, pid, Ch34xSerialDriver.class);
-					}
-                    else {
-                        Log.d(TAG, "Unknown driver!");
-                        callbackContext.error("Unknown driver!");
-                    }
 
 					prober = new UsbSerialProber(customTable);
 
@@ -197,7 +185,7 @@ public class Serial extends CordovaPlugin {
 					driver = availableDrivers.get(0);
 					UsbDevice device = driver.getDevice();
 					// create the intent that will be used to get the permission
-					PendingIntent pendingIntent = PendingIntent.getBroadcast(cordova.getActivity(), 0, new Intent(UsbBroadcastReceiver.USB_PERMISSION), 0);
+					PendingIntent pendingIntent = PendingIntent.getBroadcast(cordova.getActivity(), 0, new Intent(UsbBroadcastReceiver.USB_PERMISSION), PendingIntent.FLAG_MUTABLE);
 					// and a filter on the permission we ask
 					IntentFilter filter = new IntentFilter();
 					filter.addAction(UsbBroadcastReceiver.USB_PERMISSION);
@@ -224,6 +212,10 @@ public class Serial extends CordovaPlugin {
 	private void openSerial(final JSONObject opts, final CallbackContext callbackContext) {
 		cordova.getThreadPool().execute(new Runnable() {
 			public void run() {
+				if (driver == null) {
+					callbackContext.error("Request permissions before attempting opening port");
+					return;
+				}
 				UsbDeviceConnection connection = manager.openDevice(driver.getDevice());
 				if (connection != null) {
 					// get first port and open it
@@ -237,32 +229,27 @@ public class Serial extends CordovaPlugin {
 						setDTR = opts.has("dtr") && opts.getBoolean("dtr");
 						setRTS = opts.has("rts") && opts.getBoolean("rts");
 						// Sleep On Pause defaults to true
-						sleepOnPause = opts.has("sleepOnPause") ? opts.getBoolean("sleepOnPause") : true;
+						sleepOnPause = !opts.has("sleepOnPause") || opts.getBoolean("sleepOnPause");
 
 						port.open(connection);
 						port.setParameters(baudRate, dataBits, stopBits, parity);
 						if (setDTR) port.setDTR(true);
 						if (setRTS) port.setRTS(true);
 					}
-					catch (IOException  e) {
+					catch (IOException | JSONException e) {
 						// deal with error
-						Log.d(TAG, e.getMessage());
-						callbackContext.error(e.getMessage());
-					}
-					catch (JSONException e) {
-						// deal with error
-						Log.d(TAG, e.getMessage());
+						Log.d(TAG, Objects.requireNonNull(e.getMessage()));
 						callbackContext.error(e.getMessage());
 					}
 
-					Log.d(TAG, "Serial port opened!");
-					callbackContext.success("Serial port opened!");
 				}
 				else {
 					Log.d(TAG, "Cannot connect to the device!");
 					callbackContext.error("Cannot connect to the device!");
 				}
-				onDeviceStateChange();
+				onDeviceStateChange(callbackContext);
+				Log.d(TAG, "Serial port opened!");
+				callbackContext.success("Serial port opened!");
 			}
 		});
 	}
@@ -273,140 +260,25 @@ public class Serial extends CordovaPlugin {
 	 * @param callbackContext the cordova {@link CallbackContext}
 	 */
 	private void writeSerial(final String data, final CallbackContext callbackContext) {
-		cordova.getThreadPool().execute(new Runnable() {
-			public void run() {
-				if (port == null) {
-					callbackContext.error("Writing a closed port.");
-				}
-				else {
-					try {
-						Log.d(TAG, data);
-						byte[] buffer = data.getBytes();
-						port.write(buffer, 1000);
-						callbackContext.success();
-					}
-					catch (IOException e) {
-						// deal with error
-						Log.d(TAG, e.getMessage());
-						callbackContext.error(e.getMessage());
-					}
-				}
+		cordova.getThreadPool().execute(() -> {
+			if (port == null) {
+				callbackContext.error("Writing a closed port.");
 			}
-		});
-	}
-
-	/**
-	 * Write hex on the serial port
-	 * @param data the {@link String} representation of the data to be written on the port as hexadecimal string
-	 *             e.g. "ff55aaeeef000233"
-	 * @param callbackContext the cordova {@link CallbackContext}
-	 */
-	private void writeSerialHex(final String data, final CallbackContext callbackContext) {
-		cordova.getThreadPool().execute(new Runnable() {
-			public void run() {
-				if (port == null) {
-					callbackContext.error("Writing a closed port.");
-				}
-				else {
-					try {
-						Log.d(TAG, data);
-						byte[] buffer = hexStringToByteArray(data);
-						int result = port.write(buffer, 1000);
-						callbackContext.success(result + " bytes written.");
-					}
-					catch (IOException e) {
-						// deal with error
-						Log.d(TAG, e.getMessage());
-						callbackContext.error(e.getMessage());
-					}
-				}
-			}
-		});
-	}
-
-	/**
-	 * Convert a given string of hexadecimal numbers
-	 * into a byte[] array where every 2 hex chars get packed into
-	 * a single byte.
-	 *
-	 * E.g. "ffaa55" results in a 3 byte long byte array
-	 *
-	 * @param s
-	 * @return
-	 */
-	private byte[] hexStringToByteArray(String s) {
-		int len = s.length();
-		byte[] data = new byte[len / 2];
-		for (int i = 0; i < len; i += 2) {
-			data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-					+ Character.digit(s.charAt(i+1), 16));
-		}
-		return data;
-	}
-
-	/**
-	 * Read on the serial port
-	 * @param callbackContext the {@link CallbackContext}
-	 */
-	private void readSerial(final CallbackContext callbackContext) {
-		cordova.getThreadPool().execute(new Runnable() {
-			public void run() {
-				if (port == null) {
-					callbackContext.error("Reading a closed port.");
-				} 
-				else {
-					try {
-						int len = port.read(mReadBuffer.array(), READ_WAIT_MILLIS);
-						// Whatever happens, we send an "OK" result, up to the
-						// receiver to check that len > 0
-						PluginResult.Status status = PluginResult.Status.OK;
-						if (len > 0) {
-							Log.d(TAG, "Read data len=" + len);
-							final byte[] data = new byte[len];
-							mReadBuffer.get(data, 0, len);
-							mReadBuffer.clear();
-							callbackContext.sendPluginResult(new PluginResult(status,data));
-						}
-						else {
-							final byte[] data = new byte[0];
-							callbackContext.sendPluginResult(new PluginResult(status, data));
-						}
-					}
-					catch (IOException e) {
-						// deal with error
-						Log.d(TAG, e.getMessage());
-						callbackContext.error(e.getMessage());
-					}
-				}
-			}
-		});
-	}
-
-	/**
-	 * Close the serial port
-	 * @param callbackContext the cordova {@link CallbackContext}
-	 */
-	private void closeSerial(final CallbackContext callbackContext) {
-		cordova.getThreadPool().execute(new Runnable() {
-			public void run() {
+			else {
 				try {
-					// Make sure we don't die if we try to close an non-existing port!
-					if (port != null) {
-						port.close();
-					}
-					port = null;
-					callbackContext.success();
+					Log.d(TAG, data);
+					byte[] buffer = data.getBytes();
+					port.write(buffer, 1000);
+					callbackContext.success(buffer.length + "character written.");
 				}
-				catch (IOException e) {
+				catch (IOException | NullPointerException e) {
 					// deal with error
-					Log.d(TAG, e.getMessage());
+					Log.d(TAG, Objects.requireNonNull(e.getMessage()));
 					callbackContext.error(e.getMessage());
 				}
-				onDeviceStateChange();
 			}
 		});
 	}
-
 
 	/**
 	 * Stop observing serial connection
@@ -422,20 +294,35 @@ public class Serial extends CordovaPlugin {
 	/**
 	 * Observe serial connection
 	 */
-	private void startIoManager() {
-		if (driver != null) {
-			Log.i(TAG, "Starting io manager.");
-			mSerialIoManager = new SerialInputOutputManager(port, mListener);
-			mExecutor.submit(mSerialIoManager);
+	private void startIoManager(final CallbackContext callbackContext) {
+		if (port != null && driver != null) {
+//			UsbEndpoint endpoints = port.getReadEndpoint();
+//			if (endpoints != null) {
+				Log.i(TAG, "Starting io manager.");
+				try {
+					mSerialIoManager = new SerialInputOutputManager(port, mListener);
+					mExecutor.submit(mSerialIoManager);
+				} catch (Exception e) {
+					closePort();
+					if (callbackContext != null) {
+						callbackContext.error("Error on opening port.");
+					}
+				}
+//			} else {
+//				closePort();
+//				if (callbackContext != null) {
+//					callbackContext.error("Error on opening port.");
+//				}
+//			}
 		}
 	}
 
 	/**
 	 * Restart the observation of the serial connection
 	 */
-	private void onDeviceStateChange() {
+	private void onDeviceStateChange(final CallbackContext callbackContext) {
 		stopIoManager();
-		startIoManager();
+		startIoManager(callbackContext);
 	}
 
 	/**
@@ -443,6 +330,9 @@ public class Serial extends CordovaPlugin {
 	 * @param data the array of bytes to dispatch
 	 */
 	private void updateReceivedData(byte[] data) {
+		int x = data.length;
+		Log.d("msg", Integer.toString(x));
+		Log.d("msg", Boolean.toString(readCallback != null));
 		if( readCallback != null ) {
 			PluginResult result = new PluginResult(PluginResult.Status.OK, data);
 			result.setKeepCallback(true);
@@ -470,7 +360,18 @@ public class Serial extends CordovaPlugin {
 		});
 	}
 
-	/** 
+	private void closePort() {
+		if (port != null) {
+			try {
+				port.close();
+			} catch (IOException | NullPointerException e) {
+				// Ignore
+			}
+		}
+		port = null;
+	}
+
+	/**
 	 * Paused activity handler
 	 * @see org.apache.cordova.CordovaPlugin#onPause(boolean)
 	 */
@@ -481,7 +382,7 @@ public class Serial extends CordovaPlugin {
 			if (port != null) {
 				try {
 					port.close();
-				} catch (IOException e) {
+				} catch (IOException | NullPointerException e) {
 					// Ignore
 				}
 				port = null;
@@ -489,7 +390,7 @@ public class Serial extends CordovaPlugin {
 		}
 	}
 
-	
+
 	/**
 	 * Resumed activity handler
 	 * @see org.apache.cordova.CordovaPlugin#onResume(boolean)
@@ -500,7 +401,7 @@ public class Serial extends CordovaPlugin {
 		if (sleepOnPause) {
 			if (driver == null) {
 				Log.d(TAG, "No serial device to resume.");
-			} 
+			}
 			else {
 				UsbDeviceConnection connection = manager.openDevice(driver.getDevice());
 				if (connection != null) {
@@ -512,9 +413,9 @@ public class Serial extends CordovaPlugin {
 						if (setDTR) port.setDTR(true);
 						if (setRTS) port.setRTS(true);
 					}
-					catch (IOException  e) {
+					catch (IOException e) {
 						// deal with error
-						Log.d(TAG, e.getMessage());
+						Log.d(TAG, Objects.requireNonNull(e.getMessage()));
 					}
 					Log.d(TAG, "Serial port opened!");
 				}
@@ -523,8 +424,8 @@ public class Serial extends CordovaPlugin {
 				}
 				Log.d(TAG, "Serial device: " + driver.getClass().getSimpleName());
 			}
-			
-			onDeviceStateChange();
+
+			onDeviceStateChange(null);
 		}
 	}
 
@@ -540,11 +441,11 @@ public class Serial extends CordovaPlugin {
 			try {
 				port.close();
 			}
-			catch (IOException e) {
-				Log.d(TAG, e.getMessage());
+			catch (IOException | NullPointerException e) {
+				Log.d(TAG, Objects.requireNonNull(e.getMessage()));
 			}
 		}
-		onDeviceStateChange();
+		onDeviceStateChange(null);
 	}
 
 	/**
@@ -557,17 +458,6 @@ public class Serial extends CordovaPlugin {
 		try {
 			obj.put(key, value);
 		}
-		catch (JSONException e){}
-	}
-
-	/**
-	 * Utility method to add some properties to a {@link JSONObject}
-	 * @param obj the json object where to add the new property
-	 * @param key property key
-	 * @param bytes the array of byte to add as value to the {@link JSONObject}
-	 */
-	private void addPropertyBytes(JSONObject obj, String key, byte[] bytes) {
-		String string = Base64.encodeToString(bytes, Base64.NO_WRAP);
-		this.addProperty(obj, key, string);
+		catch (JSONException ignored){}
 	}
 }
