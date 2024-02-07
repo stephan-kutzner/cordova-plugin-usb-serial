@@ -311,7 +311,11 @@ public class Serial extends CordovaPlugin {
 	private void stopIoManager() {
 		if (mSerialIoManager != null) {
 			Log.i(TAG, "Stopping io manager.");
-			mSerialIoManager.stop();
+			try {
+				mSerialIoManager.stop();
+			} catch (Exception e) {
+
+			}
 			mSerialIoManager = null;
 		}
 	}
