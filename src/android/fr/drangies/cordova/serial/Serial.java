@@ -124,6 +124,10 @@ public class Serial extends CordovaPlugin {
 			registerReadCallback(callbackContext);
 			return true;
 		}
+		else if (ACTION_CLOSE.equals(action)) {
+			closeSerial(callbackContext);
+			return true;
+		}
 		// the action doesn't exist
 		return false;
 	}
@@ -276,6 +280,27 @@ public class Serial extends CordovaPlugin {
 					Log.d(TAG, Objects.requireNonNull(e.getMessage()));
 					callbackContext.error(e.getMessage());
 				}
+			}
+		});
+	}
+
+	private void closeSerial(final CallbackContext callbackContext) {
+		cordova.getThreadPool().execute(new Runnable() {
+			public void run() {
+				try {
+					// Make sure we don't die if we try to close an non-existing port!
+					if (port != null) {
+						port.close();
+					}
+					port = null;
+					callbackContext.success("Serial port closed!");
+				}
+				catch (IOException | NullPointerException e) {
+					// deal with error
+					Log.d(TAG, Objects.requireNonNull(e.getMessage()));
+					callbackContext.error(e.getMessage());
+				}
+				onDeviceStateChange(callbackContext);
 			}
 		});
 	}

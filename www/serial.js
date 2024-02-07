@@ -24,6 +24,9 @@ const serial = {
       { data: data },
     ]);
   },
+  close: function (successCallback, errorCallback) {
+    cordova.exec(successCallback, errorCallback, "Serial", "closeSerial", []);
+  },
   registerReadCallback: function (successCallback, errorCallback) {
     cordova.exec(
       successCallback,
