@@ -330,6 +330,7 @@ public class Serial extends CordovaPlugin {
 				Log.i(TAG, "Starting io manager.");
 				try {
 					mSerialIoManager = new SerialInputOutputManager(port, mListener);
+					mSerialIoManager.setThreadPriority(-20);
 					mExecutor.submit(mSerialIoManager);
 				} catch (Exception e) {
 					closePort();
@@ -377,6 +378,7 @@ public class Serial extends CordovaPlugin {
 		Log.d(TAG, "Registering callback");
 		cordova.getThreadPool().execute(new Runnable() {
 			public void run() {
+				Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
 				Log.d(TAG, "Registering Read Callback");
 				readCallback = callbackContext;
 				JSONObject returnObj = new JSONObject();
